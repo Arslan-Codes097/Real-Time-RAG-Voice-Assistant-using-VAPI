@@ -10,28 +10,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modelSelect = document.getElementById('modelSelect');
   const statusBar = document.getElementById('statusBar');
 
+  const DEFAULT_PUBLIC_KEY = "93bc6cf3-0c28-4aa9-b264-1c9f0c775702";
+  const DEFAULT_ASSISTANT_ID = "7b4cb4d9-b2a2-496b-ab0b-32b102602af2";
+
+  let vapiPublicKey = DEFAULT_PUBLIC_KEY;
+  let vapiAssistantId = DEFAULT_ASSISTANT_ID;
   let isVapiCallActive = false;
   let vapi = null;
 
   // Initial document fetch
   fetchDocuments();
 
-  // Initialize Vapi Web SDK Instance if available
-  let vapiPublicKey = "";
-  let vapiAssistantId = "";
-
+  // Fetch Vapi Credentials from backend health check
   try {
     const healthRes = await fetch('/api/health');
     const healthData = await healthRes.json();
-    vapiPublicKey = healthData.vapi_public_key || "93bc6cf3-0c28-4aa9-b264-1c9f0c775702";
-    vapiAssistantId = healthData.vapi_assistant_id || "7b4cb4d9-b2a2-496b-ab0b-32b102602af2";
-
-    if (window.Vapi && vapiPublicKey) {
-      vapi = new window.Vapi(vapiPublicKey);
-      setupVapiListeners();
-    }
+    if (healthData.vapi_public_key) vapiPublicKey = healthData.vapi_public_key;
+    if (healthData.vapi_assistant_id) vapiAssistantId = healthData.vapi_assistant_id;
   } catch (err) {
-    console.log('Vapi init status:', err);
+    console.log('Health check note:', err);
+  }
+
+  function getVapiInstance() {
+    if (vapi) return vapi;
+
+    const VapiClass = window.Vapi || (window.vapiSDK && window.vapiSDK.Vapi);
+    if (VapiClass && typeof VapiClass === 'function') {
+      vapi = new VapiClass(vapiPublicKey);
+      setupVapiListeners();
+      return vapi;
+    }
+    return null;
   }
 
   function setupVapiListeners() {
@@ -100,22 +109,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     statusBar.innerText = 'Connecting Vapi.ai Voice Stream...';
+    const instance = getVapiInstance();
 
-    if (!vapi && window.Vapi && vapiPublicKey) {
-      vapi = new window.Vapi(vapiPublicKey);
-      setupVapiListeners();
-    }
-
-    if (vapi && vapiAssistantId) {
+    if (instance && vapiAssistantId) {
       try {
-        await vapi.start(vapiAssistantId);
+        await instance.start(vapiAssistantId);
       } catch (err) {
         console.error('Failed to start Vapi call:', err);
         statusBar.innerText = 'Error starting Vapi call.';
       }
     } else {
-      alert('Vapi Public Key & Assistant ID required. Check your .env file.');
-      statusBar.innerText = 'Vapi credentials missing.';
+      // Fallback: If SDK fails to load from CDN, open Vapi Dashboard Call link or inform user
+      statusBar.innerText = 'Vapi Web SDK initializing... Try clicking call again.';
     }
   });
 
