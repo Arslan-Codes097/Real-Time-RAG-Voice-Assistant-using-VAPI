@@ -10,32 +10,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modelSelect = document.getElementById('modelSelect');
   const statusBar = document.getElementById('statusBar');
 
-  const DEFAULT_PUBLIC_KEY = "93bc6cf3-0c28-4aa9-b264-1c9f0c775702";
-  const DEFAULT_ASSISTANT_ID = "7b4cb4d9-b2a2-496b-ab0b-32b102602af2";
-
-  let vapiPublicKey = DEFAULT_PUBLIC_KEY;
-  let vapiAssistantId = DEFAULT_ASSISTANT_ID;
+  let vapiPublicKey = "";
+  let vapiAssistantId = "";
   let isVapiCallActive = false;
   let vapi = null;
 
   // Initial document fetch
   fetchDocuments();
 
-  // Fetch Vapi Credentials from backend health check
+  // Dynamically load Vapi Credentials from environment config endpoint
   try {
     const healthRes = await fetch('/api/health');
     const healthData = await healthRes.json();
-    if (healthData.vapi_public_key) vapiPublicKey = healthData.vapi_public_key;
-    if (healthData.vapi_assistant_id) vapiAssistantId = healthData.vapi_assistant_id;
+    vapiPublicKey = healthData.vapi_public_key || "";
+    vapiAssistantId = healthData.vapi_assistant_id || "";
   } catch (err) {
-    console.log('Health check note:', err);
+    console.log('Environment configuration fetch error:', err);
   }
 
   function getVapiInstance() {
     if (vapi) return vapi;
 
     const VapiClass = window.Vapi || (window.vapiSDK && window.vapiSDK.Vapi);
-    if (VapiClass && typeof VapiClass === 'function') {
+    if (VapiClass && typeof VapiClass === 'function' && vapiPublicKey) {
       vapi = new VapiClass(vapiPublicKey);
       setupVapiListeners();
       return vapi;
@@ -97,7 +94,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter') sendMessage();
   });
 
-  // ---------- Vapi Single Call Button Click Handler ----------
+  // ---------- Vapi Voice Call Handler ----------
 
   vapiCallBtn.addEventListener('click', async () => {
     if (isVapiCallActive) {
@@ -105,6 +102,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       isVapiCallActive = false;
       vapiCallBtn.classList.remove('active');
       statusBar.innerText = 'Call ended.';
+      return;
+    }
+
+    if (!vapiPublicKey || !vapiAssistantId) {
+      // Re-fetch credentials dynamically if not yet loaded
+      try {
+        const healthRes = await fetch('/api/health');
+        const healthData = await healthRes.json();
+        vapiPublicKey = healthData.vapi_public_key || "";
+        vapiAssistantId = healthData.vapi_assistant_id || "";
+      } catch (err) {
+        console.error('Failed to load Vapi keys:', err);
+      }
+    }
+
+    if (!vapiPublicKey || !vapiAssistantId) {
+      statusBar.innerText = 'Error: VAPI_PUBLIC_KEY or VAPI_ASSISTANT_ID is missing in .env file.';
       return;
     }
 
@@ -119,8 +133,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusBar.innerText = 'Error starting Vapi call.';
       }
     } else {
-      // Fallback: If SDK fails to load from CDN, open Vapi Dashboard Call link or inform user
-      statusBar.innerText = 'Vapi Web SDK initializing... Try clicking call again.';
+      statusBar.innerText = 'Vapi Web SDK loading... Please try again in a moment.';
     }
   });
 
