@@ -1,4 +1,4 @@
-// Arslan.AI Voice RAG Assistant (Vapi.ai Engine)
+// Arslan.AI Voice RAG Assistant (Universal Vapi Engine)
 
 document.addEventListener('DOMContentLoaded', async () => {
   const emptyState = document.getElementById('emptyState');
@@ -13,73 +13,92 @@ document.addEventListener('DOMContentLoaded', async () => {
   let vapiPublicKey = "";
   let vapiAssistantId = "";
   let isVapiCallActive = false;
-  let vapi = null;
+  let vapiInstance = null;
 
   // Initial document fetch
   fetchDocuments();
 
-  // Dynamically load Vapi Credentials from environment config endpoint
-  try {
-    const healthRes = await fetch('/api/health');
-    const healthData = await healthRes.json();
-    vapiPublicKey = healthData.vapi_public_key || "";
-    vapiAssistantId = healthData.vapi_assistant_id || "";
-  } catch (err) {
-    console.log('Environment configuration fetch error:', err);
-  }
-
-  function getVapiInstance() {
-    if (vapi) return vapi;
-
-    const VapiClass = window.Vapi || (window.vapiSDK && window.vapiSDK.Vapi);
-    if (VapiClass && typeof VapiClass === 'function' && vapiPublicKey) {
-      vapi = new VapiClass(vapiPublicKey);
-      setupVapiListeners();
-      return vapi;
+  // Load environment keys dynamically from backend
+  async function loadConfig() {
+    try {
+      const res = await fetch('/api/health');
+      const data = await res.json();
+      vapiPublicKey = data.vapi_public_key || "";
+      vapiAssistantId = data.vapi_assistant_id || "";
+    } catch (err) {
+      console.log('Health config fetch error:', err);
     }
-    return null;
   }
 
-  function setupVapiListeners() {
-    if (!vapi) return;
+  loadConfig();
 
-    vapi.on('call-start', () => {
-      isVapiCallActive = true;
-      vapiCallBtn.classList.add('active');
-      statusBar.innerText = 'Vapi Voice Call Active! Speak naturally into your microphone.';
-      emptyState.style.display = 'none';
-      appendMessage('assistant', 'Vapi Real-Time Voice Session Connected! Ask me anything about your documents.');
-    });
+  function onCallStart() {
+    isVapiCallActive = true;
+    vapiCallBtn.classList.add('active');
+    statusBar.innerText = 'Vapi Voice Call Active! Speak into your microphone.';
+    emptyState.style.display = 'none';
+    appendMessage('assistant', 'Vapi Real-Time Voice Session Active. How can I help you with your documents?');
+  }
 
-    vapi.on('call-end', () => {
-      isVapiCallActive = false;
-      vapiCallBtn.classList.remove('active');
-      statusBar.innerText = 'Vapi voice call ended.';
-    });
+  function onCallEnd() {
+    isVapiCallActive = false;
+    vapiCallBtn.classList.remove('active');
+    statusBar.innerText = 'Vapi voice call ended.';
+  }
 
-    vapi.on('speech-start', () => {
-      statusBar.innerText = 'Vapi Assistant speaking...';
-    });
+  // ---------- Universal Vapi Call Handler ----------
 
-    vapi.on('speech-end', () => {
-      statusBar.innerText = 'Vapi Voice Call Active! Listening...';
-    });
+  vapiCallBtn.addEventListener('click', async () => {
+    if (isVapiCallActive) {
+      if (vapiInstance && vapiInstance.stop) vapiInstance.stop();
+      onCallEnd();
+      return;
+    }
 
-    vapi.on('message', (message) => {
-      if (message.type === 'transcript' && message.transcriptType === 'final') {
-        if (message.role === 'user') {
-          appendMessage('user', message.transcript);
-        } else if (message.role === 'assistant') {
-          appendMessage('assistant', message.transcript);
+    if (!vapiPublicKey || !vapiAssistantId) {
+      await loadConfig();
+    }
+
+    if (!vapiPublicKey || !vapiAssistantId) {
+      statusBar.innerText = 'Error: VAPI_PUBLIC_KEY or VAPI_ASSISTANT_ID missing in .env file.';
+      return;
+    }
+
+    statusBar.innerText = 'Connecting to Vapi Voice Server...';
+
+    try {
+      if (window.Vapi && typeof window.Vapi === 'function') {
+        vapiInstance = new window.Vapi(vapiPublicKey);
+        vapiInstance.on('call-start', onCallStart);
+        vapiInstance.on('call-end', onCallEnd);
+        vapiInstance.on('speech-start', () => { statusBar.innerText = 'Vapi Assistant speaking...'; });
+        vapiInstance.on('speech-end', () => { statusBar.innerText = 'Listening...'; });
+        vapiInstance.on('message', (msg) => {
+          if (msg.type === 'transcript' && msg.transcriptType === 'final') {
+            appendMessage(msg.role === 'user' ? 'user' : 'assistant', msg.transcript);
+          }
+        });
+        await vapiInstance.start(vapiAssistantId);
+      } else if (window.vapiSDK) {
+        if (typeof window.vapiSDK.run === 'function') {
+          vapiInstance = window.vapiSDK.run({
+            apiKey: vapiPublicKey,
+            assistant: vapiAssistantId
+          });
+          onCallStart();
+        } else if (typeof window.vapiSDK === 'function') {
+          vapiInstance = new window.vapiSDK(vapiPublicKey);
+          await vapiInstance.start(vapiAssistantId);
+          onCallStart();
         }
+      } else {
+        statusBar.innerText = 'Vapi Web SDK loading... Please click call again in 3 seconds.';
       }
-    });
-
-    vapi.on('error', (err) => {
-      console.error('Vapi Web SDK error:', err);
-      statusBar.innerText = 'Vapi Voice Error. Check browser microphone permissions.';
-    });
-  }
+    } catch (err) {
+      console.error('Vapi connection error:', err);
+      statusBar.innerText = 'Connection error. Click call again to retry.';
+    }
+  });
 
   // New Chat reset
   newChatBtn.addEventListener('click', () => {
@@ -92,49 +111,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   sendBtn.addEventListener('click', sendMessage);
   textInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendMessage();
-  });
-
-  // ---------- Vapi Voice Call Handler ----------
-
-  vapiCallBtn.addEventListener('click', async () => {
-    if (isVapiCallActive) {
-      if (vapi) vapi.stop();
-      isVapiCallActive = false;
-      vapiCallBtn.classList.remove('active');
-      statusBar.innerText = 'Call ended.';
-      return;
-    }
-
-    if (!vapiPublicKey || !vapiAssistantId) {
-      // Re-fetch credentials dynamically if not yet loaded
-      try {
-        const healthRes = await fetch('/api/health');
-        const healthData = await healthRes.json();
-        vapiPublicKey = healthData.vapi_public_key || "";
-        vapiAssistantId = healthData.vapi_assistant_id || "";
-      } catch (err) {
-        console.error('Failed to load Vapi keys:', err);
-      }
-    }
-
-    if (!vapiPublicKey || !vapiAssistantId) {
-      statusBar.innerText = 'Error: VAPI_PUBLIC_KEY or VAPI_ASSISTANT_ID is missing in .env file.';
-      return;
-    }
-
-    statusBar.innerText = 'Connecting Vapi.ai Voice Stream...';
-    const instance = getVapiInstance();
-
-    if (instance && vapiAssistantId) {
-      try {
-        await instance.start(vapiAssistantId);
-      } catch (err) {
-        console.error('Failed to start Vapi call:', err);
-        statusBar.innerText = 'Error starting Vapi call.';
-      }
-    } else {
-      statusBar.innerText = 'Vapi Web SDK loading... Please try again in a moment.';
-    }
   });
 
   // ---------- Send Message & Execute LangChain RAG ----------
