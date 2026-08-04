@@ -1,47 +1,79 @@
-// Arslan.AI Voice RAG Assistant (Vapi.ai) Engine
+// Arslan.AI Voice RAG Assistant (Vapi.ai Engine)
 
 document.addEventListener('DOMContentLoaded', async () => {
   const emptyState = document.getElementById('emptyState');
   const messagesDiv = document.getElementById('messages');
   const textInput = document.getElementById('textInput');
   const sendBtn = document.getElementById('sendBtn');
-  const micBtn = document.getElementById('micBtn');
   const vapiCallBtn = document.getElementById('vapiCallBtn');
   const newChatBtn = document.getElementById('newChatBtn');
-  const voiceReplyToggle = document.getElementById('voiceReplyToggle');
   const modelSelect = document.getElementById('modelSelect');
   const statusBar = document.getElementById('statusBar');
-  const ttsPlayer = document.getElementById('ttsPlayer');
 
-  let isVoiceReplyEnabled = true;
-  let isRecording = false;
   let isVapiCallActive = false;
-  let recognition = null;
-  let vapiInstance = null;
+  let vapi = null;
 
   // Initial document fetch
   fetchDocuments();
 
-  // Fetch Vapi Credentials from backend
+  // Initialize Vapi Web SDK Instance if available
+  let vapiPublicKey = "";
+  let vapiAssistantId = "";
+
   try {
     const healthRes = await fetch('/api/health');
     const healthData = await healthRes.json();
-    if (healthData.vapi_public_key && window.vapiSDK) {
-      vapiInstance = window.vapiSDK.run({
-        apiKey: healthData.vapi_public_key,
-        assistant: healthData.vapi_assistant_id
-      });
+    vapiPublicKey = healthData.vapi_public_key || "93bc6cf3-0c28-4aa9-b264-1c9f0c775702";
+    vapiAssistantId = healthData.vapi_assistant_id || "7b4cb4d9-b2a2-496b-ab0b-32b102602af2";
+
+    if (window.Vapi && vapiPublicKey) {
+      vapi = new window.Vapi(vapiPublicKey);
+      setupVapiListeners();
     }
   } catch (err) {
-    console.log('Vapi SDK init note:', err);
+    console.log('Vapi init status:', err);
   }
 
-  // Voice reply toggle
-  voiceReplyToggle.addEventListener('click', () => {
-    isVoiceReplyEnabled = !isVoiceReplyEnabled;
-    voiceReplyToggle.setAttribute('data-enabled', isVoiceReplyEnabled);
-    voiceReplyToggle.innerText = isVoiceReplyEnabled ? 'Enabled' : 'Disabled';
-  });
+  function setupVapiListeners() {
+    if (!vapi) return;
+
+    vapi.on('call-start', () => {
+      isVapiCallActive = true;
+      vapiCallBtn.classList.add('active');
+      statusBar.innerText = 'Vapi Voice Call Active! Speak naturally into your microphone.';
+      emptyState.style.display = 'none';
+      appendMessage('assistant', 'Vapi Real-Time Voice Session Connected! Ask me anything about your documents.');
+    });
+
+    vapi.on('call-end', () => {
+      isVapiCallActive = false;
+      vapiCallBtn.classList.remove('active');
+      statusBar.innerText = 'Vapi voice call ended.';
+    });
+
+    vapi.on('speech-start', () => {
+      statusBar.innerText = 'Vapi Assistant speaking...';
+    });
+
+    vapi.on('speech-end', () => {
+      statusBar.innerText = 'Vapi Voice Call Active! Listening...';
+    });
+
+    vapi.on('message', (message) => {
+      if (message.type === 'transcript' && message.transcriptType === 'final') {
+        if (message.role === 'user') {
+          appendMessage('user', message.transcript);
+        } else if (message.role === 'assistant') {
+          appendMessage('assistant', message.transcript);
+        }
+      }
+    });
+
+    vapi.on('error', (err) => {
+      console.error('Vapi Web SDK error:', err);
+      statusBar.innerText = 'Vapi Voice Error. Check browser microphone permissions.';
+    });
+  }
 
   // New Chat reset
   newChatBtn.addEventListener('click', () => {
@@ -50,100 +82,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusBar.innerText = 'Ready';
   });
 
-  // Send message
+  // Send text message
   sendBtn.addEventListener('click', sendMessage);
   textInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendMessage();
   });
 
-  // Web Speech API STT setup
-  if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
+  // ---------- Vapi Single Call Button Click Handler ----------
 
-    recognition.onstart = () => {
-      isRecording = true;
-      micBtn.classList.add('recording');
-      statusBar.innerText = 'Listening... Speak your question now.';
-    };
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      textInput.value = transcript;
-      sendMessage();
-    };
-
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      statusBar.innerText = 'Speech recognition error. Try again.';
-      stopRecording();
-    };
-
-    recognition.onend = () => {
-      stopRecording();
-    };
-  }
-
-  micBtn.addEventListener('click', () => {
-    if (!recognition) {
-      alert('Speech Recognition is not supported in this browser. Please type your query.');
-      return;
-    }
-    if (isRecording) {
-      recognition.stop();
-    } else {
-      recognition.start();
-    }
-  });
-
-  function stopRecording() {
-    isRecording = false;
-    micBtn.classList.remove('recording');
-    statusBar.innerText = 'Ready';
-  }
-
-  // Vapi Voice Call Handler
   vapiCallBtn.addEventListener('click', async () => {
     if (isVapiCallActive) {
+      if (vapi) vapi.stop();
       isVapiCallActive = false;
       vapiCallBtn.classList.remove('active');
-      statusBar.innerText = 'Vapi voice call ended.';
-      if (vapiInstance && vapiInstance.stop) {
-        vapiInstance.stop();
-      }
+      statusBar.innerText = 'Call ended.';
       return;
     }
 
-    statusBar.innerText = 'Connecting to Vapi.ai Real-Time Voice Server...';
-    try {
-      const healthRes = await fetch('/api/health');
-      const healthData = await healthRes.json();
+    statusBar.innerText = 'Connecting Vapi.ai Voice Stream...';
 
-      if (!healthData.vapi_public_key || healthData.vapi_public_key.includes('your_vapi')) {
-        alert('Vapi Public Key is not set in .env! Configure VAPI_PUBLIC_KEY and VAPI_ASSISTANT_ID from your https://dashboard.vapi.ai dashboard.');
-        statusBar.innerText = 'Vapi API credentials missing in .env.';
-        return;
+    if (!vapi && window.Vapi && vapiPublicKey) {
+      vapi = new window.Vapi(vapiPublicKey);
+      setupVapiListeners();
+    }
+
+    if (vapi && vapiAssistantId) {
+      try {
+        await vapi.start(vapiAssistantId);
+      } catch (err) {
+        console.error('Failed to start Vapi call:', err);
+        statusBar.innerText = 'Error starting Vapi call.';
       }
-
-      isVapiCallActive = true;
-      vapiCallBtn.classList.add('active');
-      statusBar.innerText = 'Vapi Voice Call Active! Speak naturally to your assistant.';
-      emptyState.style.display = 'none';
-      appendMessage('assistant', 'Vapi Real-Time Voice Assistant active. Ask anything about your uploaded documents!');
-
-      if (vapiInstance && vapiInstance.start) {
-        vapiInstance.start();
-      }
-    } catch (err) {
-      console.error('Vapi connection error:', err);
-      statusBar.innerText = 'Error connecting to Vapi voice server.';
+    } else {
+      alert('Vapi Public Key & Assistant ID required. Check your .env file.');
+      statusBar.innerText = 'Vapi credentials missing.';
     }
   });
 
-  // ---------- Send Message & Execute RAG ----------
+  // ---------- Send Message & Execute LangChain RAG ----------
 
   async function sendMessage() {
     const text = textInput.value.trim();
@@ -152,7 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     emptyState.style.display = 'none';
     appendMessage('user', text);
     textInput.value = '';
-    statusBar.innerText = 'Retrieving document knowledge & generating answer...';
+    statusBar.innerText = 'Searching document knowledge & generating answer...';
 
     const selectedModel = modelSelect.value;
 
@@ -168,10 +144,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (data.reply) {
         appendMessage('assistant', data.reply, data.sources);
-
-        if (isVoiceReplyEnabled) {
-          playTTS(data.reply);
-        }
       } else {
         appendMessage('assistant', data.detail || 'Sorry, I could not generate a response.');
       }
@@ -201,22 +173,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     messagesDiv.appendChild(bubble);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
-  }
-
-  async function playTTS(text) {
-    try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
-      });
-      const blob = await res.blob();
-      const audioUrl = URL.createObjectURL(blob);
-      ttsPlayer.src = audioUrl;
-      ttsPlayer.play();
-    } catch (err) {
-      console.error('TTS Playback Error:', err);
-    }
   }
 });
 
@@ -257,7 +213,7 @@ async function uploadSelectedFile(event) {
   if (!file) return;
 
   const statusBar = document.getElementById('statusBar');
-  statusBar.innerText = `Uploading and embedding '${file.name}' into vector database...`;
+  statusBar.innerText = `Uploading and embedding '${file.name}' into Supabase Vector DB...`;
 
   const formData = new FormData();
   formData.append('file', file);
