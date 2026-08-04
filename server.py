@@ -28,18 +28,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ChatRequest(BaseModel):
-    message: str
-    model: str = "llama-3.3-70b-versatile"
-
-class VapiMessage(BaseModel):
-    role: str
-    content: str
-
-class VapiChatCompletionRequest(BaseModel):
-    model: Optional[str] = "llama-3.3-70b-versatile"
-    messages: List[Dict[str, Any]] = []
-
 @app.get("/api/health")
 def health_check():
     return {
@@ -57,67 +45,104 @@ async def vapi_custom_llm_endpoint(request: Request):
     OpenAI-compatible Chat Completion endpoint for Vapi Custom LLM Integration.
     Vapi Dashboard -> Assistant -> Model Provider -> Custom LLM -> Set Server URL to this endpoint.
     """
-    body = await request.json()
-    messages = body.get("messages", [])
+    try:
+        body = await request.json()
+        messages = body.get("messages", [])
 
-    user_query = ""
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            user_query = msg.get("content", "")
-            break
+        user_query = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_query = msg.get("content", "")
+                break
 
-    if not user_query:
-        user_query = "Hello"
+        if not user_query:
+            user_query = "Hello"
 
-    # Execute LangChain RAG pipeline
-    rag_result = query_rag(user_query)
-    reply_text = rag_result.get("reply", "I am unable to answer based on the available documents.")
+        rag_result = query_rag(user_query)
+        reply_text = rag_result.get("reply", "I am unable to answer based on the available documents.")
 
-    return {
-        "id": f"vapi-rag-{int(time.time())}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": "llama-3.3-70b-versatile",
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": reply_text
-                },
-                "finish_reason": "stop"
-            }
-        ]
-    }
+        return {
+            "id": f"vapi-rag-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "llama-3.3-70b-versatile",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": reply_text
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }
+    except Exception as e:
+        print(f"Vapi Custom LLM Error: {e}")
+        return {
+            "id": f"vapi-error-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "llama-3.3-70b-versatile",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "I am experiencing a temporary connection issue reaching the document database."
+                    },
+                    "finish_reason": "stop"
+                }
+            ]
+        }
 
-# ---------- Direct REST Chat & Speech APIs ----------
+# ---------- Direct REST Chat & Speech APIs & Vapi Tool Endpoints ----------
 
 @app.post("/api/chat")
-def chat_endpoint(request: ChatRequest):
-    """Direct RAG query endpoint for text & voice UI."""
-    if not request.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
+async def chat_endpoint(request: Request):
+    """Direct RAG query endpoint for text & voice UI and Vapi API Tool calls."""
     try:
-        result = query_rag(request.message, model_name=request.model)
+        body = await request.json()
+        
+        # Flexibly extract question from message, query, input, or tool arguments
+        query = body.get("message") or body.get("query") or body.get("input") or ""
+        if isinstance(query, dict):
+            query = query.get("content") or query.get("text") or ""
+            
+        if not str(query).strip() and "message" in body and isinstance(body["message"], str):
+            query = body["message"]
+            
+        if not str(query).strip():
+            query = "What information is in the knowledge base?"
+
+        model_name = body.get("model", "llama-3.3-70b-versatile")
+        result = query_rag(str(query), model_name=model_name)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Chat Endpoint Warning: {e}")
+        return {
+            "reply": "I am having trouble accessing documents right now.",
+            "sources": [],
+            "retrieved_chunks": [],
+            "error": str(e)
+        }
 
 @app.post("/api/tts")
-def tts_endpoint(request: ChatRequest):
+async def tts_endpoint(request: Request):
     """Generate natural voice audio stream (MP3) from text reply using gTTS."""
-    if not request.message.strip():
-        raise HTTPException(status_code=400, detail="Message empty.")
-
     try:
-        tts = gTTS(text=request.message, lang="en", slow=False)
+        body = await request.json()
+        message = body.get("message", "").strip()
+        if not message:
+            return JSONResponse({"error": "Message empty"}, status_code=400)
+
+        tts = gTTS(text=message, lang="en", slow=False)
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         fp.seek(0)
         return StreamingResponse(fp, media_type="audio/mpeg")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTS Error: {str(e)}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 # ---------- RAG Document Management Endpoints ----------
 
@@ -136,7 +161,7 @@ async def upload_document(file: UploadFile = File(...)):
         res = process_and_add_uploaded_file(contents, file.filename)
         return {"status": "success", "message": f"Successfully ingested {file.filename}", "details": res}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
 
 @app.delete("/api/documents/{filename}")
 def delete_document(filename: str):
@@ -144,7 +169,7 @@ def delete_document(filename: str):
         delete_document_by_source(filename)
         return {"status": "success", "message": f"Deleted document '{filename}'"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 # ---------- Bulletproof Static Asset Handlers ----------
 
