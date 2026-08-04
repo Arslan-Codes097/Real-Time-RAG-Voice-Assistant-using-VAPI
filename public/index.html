@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arslan.AI | Voice RAG Assistant (Vapi.ai)</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Vapi.ai Official Web SDK -->
+  <script src="https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- Sidebar: Arslan.AI branding, model choice, document management, social links -->
+  <aside class="sidebar">
+    <div class="brand">Arslan<span class="accent">.AI</span> <span class="vapi-badge">Vapi Voice</span></div>
+
+    <button id="newChatBtn" class="side-btn">+ New Chat</button>
+
+    <div class="side-section">
+      <label for="modelSelect">LLM Model</label>
+      <select id="modelSelect">
+        <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Recommended)</option>
+        <option value="llama-3.1-8b-instant">Llama 3.1 8B (Fast)</option>
+        <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+      </select>
+    </div>
+
+    <div class="side-section">
+      <label>Voice Reply</label>
+      <button id="voiceReplyToggle" class="toggle-btn" data-enabled="true">Enabled</button>
+    </div>
+
+    <!-- RAG Knowledge Base Document Manager -->
+    <div class="side-section docs-section">
+      <label>Knowledge Base (RAG)</label>
+      <input type="file" id="fileUpload" accept=".pdf,.docx,.txt" style="display: none;" onchange="uploadSelectedFile(event)" />
+      <button class="side-btn upload-btn" onclick="document.getElementById('fileUpload').click()">
+        📁 + Upload Document
+      </button>
+      
+      <div class="doc-list-container">
+        <div class="doc-list-title">Active Knowledge Files:</div>
+        <div id="docList" class="doc-list">
+          <div class="doc-loading">Loading documents...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">Made with &#10084; by Arslan</div>
+    <div class="sidebar-socials">
+      <a href="https://github.com/Arslan-Codes097" target="_blank" title="GitHub">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.03-2.683-.103-.253-.447-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+      </a>
+      <span class="separator">|</span>
+      <a href="https://www.linkedin.com/in/arslan-babar-27516731a/" target="_blank" title="LinkedIn">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>
+      </a>
+      <span class="separator">|</span>
+      <a href="tel:+923267441052" title="Phone">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.3 1.1L6.6 10.8z"/></svg>
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main chat column -->
+  <main class="main">
+
+    <div id="chatArea" class="chat-area">
+      <div id="emptyState" class="empty-state">
+        <div class="empty-title">Arslan<span class="accent">.AI</span></div>
+        <div class="empty-greeting">HOW CAN I HELP YOU TODAY?</div>
+        <div class="empty-subtext">Ask me anything about your uploaded documents or start a Vapi voice call.</div>
+      </div>
+
+      <div id="messages" class="messages"></div>
+    </div>
+
+    <div class="input-row">
+      <button id="micBtn" class="icon-btn" title="Record voice message (Web Speech API)">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+
+      <input id="textInput" type="text" placeholder="Message Arslan.AI..." autocomplete="off" />
+
+      <button id="sendBtn" class="icon-btn send-btn" title="Send message">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+      </button>
+
+      <button id="vapiCallBtn" class="icon-btn call-btn" title="Start Vapi.ai Voice Call">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.3 1.1L6.6 10.8z"/></svg>
+      </button>
+    </div>
+
+    <div id="statusBar" class="status-bar">Ready</div>
+
+  </main>
+
+</div>
+
+<audio id="ttsPlayer" hidden></audio>
+
+<script src="app.js"></script>
+</body>
+</html>

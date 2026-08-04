@@ -1,0 +1,22 @@
+# Environment variables (secret keys)
+.env
+.env.local
+
+# Python cache & virtualenvs
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+
+# Garbage / Local sample files
+sample_docs/
+*.pdf
+*.docx
+*.txt
+
+# IDE & Vercel build folders
+.vscode/
+.idea/
+.vercel/
