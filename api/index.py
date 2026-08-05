@@ -7,4 +7,5 @@ if root_dir not in sys.path:
 
 from server import app
 
+# This handler is used by Vercel to route requests to FastAPI
 handler = app

@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["FASTEMBED_CACHE_PATH"] = os.path.join(tempfile.gettempdir(), "fastembed_cache")
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 load_dotenv()
@@ -27,35 +26,27 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-_fastembed_instance = None
+from langchain_community.vectorstores import SupabaseVectorStore
+
+_hf_embeddings_instance = None
 
 def get_embeddings():
-    global _fastembed_instance
-    if _fastembed_instance is None:
+    global _hf_embeddings_instance
+    if _hf_embeddings_instance is None:
         try:
-            from fastembed import TextEmbedding
-            class FastEmbedWrapper:
-                def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
-                    self.model = TextEmbedding(model_name=model_name, cache_dir=os.environ["FASTEMBED_CACHE_PATH"])
-
-                def embed_documents(self, texts: List[str]) -> List[List[float]]:
-                    results = []
-                    batch_size = 16
-                    for i in range(0, len(texts), batch_size):
-                        batch = texts[i:i + batch_size]
-                        embeddings = list(self.model.embed(batch))
-                        for vec in embeddings:
-                            results.append([float(v) for v in vec])
-                    return results
-
-                def embed_query(self, text: str) -> List[float]:
-                    return [float(v) for v in next(self.model.embed([text]))]
-
-            _fastembed_instance = FastEmbedWrapper()
+            from langchain_huggingface import HuggingFaceEndpointEmbeddings
+            hf_token = os.getenv("HF_TOKEN", "")
+            if not hf_token:
+                print("HF_TOKEN is missing in environment variables!")
+                return None
+            _hf_embeddings_instance = HuggingFaceEndpointEmbeddings(
+                model="BAAI/bge-small-en-v1.5",
+                huggingfacehub_api_token=hf_token
+            )
         except Exception as e:
-            print(f"FastEmbed Initialization Note: {e}")
-            _fastembed_instance = False
-    return _fastembed_instance
+            print(f"HuggingFace Embeddings Initialization Note: {e}")
+            _hf_embeddings_instance = False
+    return _hf_embeddings_instance
 
 def get_supabase_client():
     url = os.getenv("SUPABASE_URL", "")
@@ -91,61 +82,38 @@ Question:
 """
 
 def query_rag(question: str, model_name: str = "llama-3.3-70b-versatile") -> Dict[str, Any]:
-    """Execute LangChain RAG pipeline against Supabase Vector Database with hybrid fallback."""
+    """Execute LangChain RAG pipeline against Supabase Vector Database using standard vector store."""
     if not question.strip():
         return {"reply": "I didn't hear a question.", "sources": []}
 
     retrieved_chunks = []
     sources = []
     supabase_client = get_supabase_client()
+    embeddings = get_embeddings()
 
-    if supabase_client:
-        rows = []
-        # Step 1: Try vector search if embeddings model is available
+    if supabase_client and embeddings:
         try:
-            embeddings = get_embeddings()
-            if embeddings:
-                query_vector = embeddings.embed_query(question)
-                rpc_params = {
-                    "query_embedding": query_vector,
-                    "match_count": 3,
-                    "filter": {}
-                }
-                res = supabase_client.rpc("match_documents", rpc_params).execute()
-                rows = res.data or []
-        except Exception as e:
-            print(f"Vector search warning: {e}")
-            rows = []
-
-        # Step 2: Hybrid keyword text fallback search
-        if not rows:
-            try:
-                keywords = [w for w in question.split() if len(w) > 3]
-                if keywords:
-                    kw = keywords[0]
-                    text_res = supabase_client.table("documents").select("content, metadata").ilike("content", f"%{kw}%").limit(3).execute()
-                    rows = text_res.data or []
-                else:
-                    text_res = supabase_client.table("documents").select("content, metadata").limit(3).execute()
-                    rows = text_res.data or []
-            except Exception as e:
-                print(f"Text search warning: {e}")
-                rows = []
-
-        for r in rows:
-            snippet = r.get("content", "").strip()
-            if snippet:
-                retrieved_chunks.append(snippet)
-                meta = r.get("metadata") or {}
-                src = meta.get("source_file") or meta.get("source") or "Document"
+            vector_store = SupabaseVectorStore(
+                client=supabase_client,
+                embedding=embeddings,
+                table_name="documents",
+                query_name="match_documents",
+            )
+            retriever = vector_store.as_retriever(search_kwargs={"k": 4})
+            docs = retriever.invoke(question)
+            
+            for doc in docs:
+                retrieved_chunks.append(doc.page_content)
+                src = doc.metadata.get("source_file") or doc.metadata.get("source") or "Document"
                 if src not in sources:
                     sources.append(src)
-        context_text = "\n\n".join(retrieved_chunks)
-    else:
-        context_text = "No document database connection configured."
+        except Exception as e:
+            print(f"Retrieval error: {e}")
 
-    if not context_text:
+    if not retrieved_chunks:
         context_text = "No relevant document context found."
+    else:
+        context_text = "\n\n".join(retrieved_chunks)
 
     prompt = ChatPromptTemplate.from_template(VOICE_SYSTEM_PROMPT)
     llm = get_groq_llm(model_name)
@@ -219,30 +187,29 @@ def process_and_add_uploaded_file(file_bytes: bytes, filename: str) -> Dict[str,
     splitter = RecursiveCharacterTextSplitter(chunk_size=750, chunk_overlap=100)
     chunks = splitter.split_documents(raw_docs)
 
-    chunk_texts = [c.page_content for c in chunks]
-    embeddings = get_embeddings()
-    vectors = embeddings.embed_documents(chunk_texts) if embeddings else []
-
     supabase_client = get_supabase_client()
-    if supabase_client:
+    embeddings = get_embeddings()
+    
+    if supabase_client and embeddings:
         try:
             delete_document_by_source(filename)
         except Exception:
             pass
-
-        records = []
-        for i in range(len(chunks)):
-            records.append({
-                "id": str(uuid.uuid4()),
-                "content": chunk_texts[i],
-                "metadata": {"source_file": filename, "chunk_index": i},
-                "embedding": vectors[i] if (vectors and i < len(vectors)) else []
-            })
-
-        batch_size = 50
-        for idx in range(0, len(records), batch_size):
-            batch = records[idx:idx + batch_size]
-            supabase_client.table("documents").upsert(batch).execute()
+            
+        vector_store = SupabaseVectorStore(
+            client=supabase_client,
+            embedding=embeddings,
+            table_name="documents",
+            query_name="match_documents",
+        )
+        
+        # Add a chunk_index to metadata
+        for i, chunk in enumerate(chunks):
+            if "source_file" not in chunk.metadata:
+                chunk.metadata["source_file"] = filename
+            chunk.metadata["chunk_index"] = i
+            
+        vector_store.add_documents(chunks)
 
     try:
         os.remove(temp_path)

@@ -24,47 +24,74 @@ DOCS_DIRECTORY = os.path.join(os.path.dirname(__file__), "sample_docs")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-class FastEmbedWrapper:
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
-        self.model = TextEmbedding(model_name=model_name)
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
+from langchain_community.vectorstores import SupabaseVectorStore
+from supabase import create_client
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        results = []
-        batch_size = 16
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            embeddings = list(self.model.embed(batch))
-            for vec in embeddings:
-                results.append([float(v) for v in vec])
-        return results
+def get_embeddings():
+    hf_token = os.getenv("HF_TOKEN", "")
+    if not hf_token:
+        print("HF_TOKEN is missing! Please add it to your .env file.")
+        return None
+    return HuggingFaceEndpointEmbeddings(
+        model="BAAI/bge-small-en-v1.5",
+        huggingfacehub_api_token=hf_token
+    )
 
-    def embed_query(self, text: str) -> List[float]:
-        return [float(v) for v in next(self.model.embed([text]))]
 
-embeddings = FastEmbedWrapper()
+import pdfplumber
 
 def load_pdf(file_path: str) -> List[Document]:
-    reader = PdfReader(file_path)
     docs = []
     filename = os.path.basename(file_path)
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if text.strip():
-            docs.append(
-                Document(
-                    page_content=text,
-                    metadata={"source": filename, "source_file": filename, "page": i + 1}
+    
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                # Using layout=True to preserve spatial arrangement and tables
+                text = page.extract_text(layout=True) or page.extract_text() or ""
+                if text.strip():
+                    docs.append(
+                        Document(
+                            page_content=text,
+                            metadata={"source": filename, "source_file": filename, "page": i + 1}
+                        )
+                    )
+        return docs
+    except Exception as e:
+        print(f"pdfplumber failed for {filename} ({e}), falling back to pypdf...")
+        reader = PdfReader(file_path)
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                docs.append(
+                    Document(
+                        page_content=text,
+                        metadata={"source": filename, "source_file": filename, "page": i + 1}
+                    )
                 )
-            )
-    return docs
+        return docs
 
 def load_docx(file_path: str) -> List[Document]:
     doc = docx.Document(file_path)
     full_text = []
     filename = os.path.basename(file_path)
+    
+    # Extract text from paragraphs
     for para in doc.paragraphs:
         if para.text.strip():
-            full_text.append(para.text)
+            full_text.append(para.text.strip())
+            
+    # Extract text from tables
+    for table in doc.tables:
+        for row in table.rows:
+            row_data = []
+            for cell in row.cells:
+                if cell.text.strip():
+                    row_data.append(cell.text.strip())
+            if row_data:
+                full_text.append(" | ".join(row_data))
+                
     content = "\n".join(full_text)
     if content.strip():
         return [Document(page_content=content, metadata={"source": filename, "source_file": filename})]
@@ -109,30 +136,35 @@ def ingest_documents():
     )
     chunks = text_splitter.split_documents(raw_docs)
     print(f"🧩 Split into {len(chunks)} text chunks.")
-
-    print("🧠 Generating Embeddings in Batches...")
-    chunk_texts = [c.page_content for c in chunks]
-    vectors = embeddings.embed_documents(chunk_texts)
+    
+    # Add index to metadata
+    for i, chunk in enumerate(chunks):
+        if "source_file" not in chunk.metadata:
+            chunk.metadata["source_file"] = chunk.metadata.get("source", "Document")
+        chunk.metadata["chunk_index"] = i
 
     if SUPABASE_URL and SUPABASE_KEY and "your_supabase" not in SUPABASE_URL:
-        print("⚡ Upserting vector chunks into Supabase Cloud Vector DB...")
-        from supabase import create_client
+        print("⚡ Upserting vector chunks into Supabase Cloud Vector DB using LangChain...")
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-        records = []
-        for i in range(len(chunks)):
-            source_file = chunks[i].metadata.get("source_file") or chunks[i].metadata.get("source")
-            records.append({
-                "id": str(uuid.uuid4()),
-                "content": chunk_texts[i],
-                "metadata": {"source_file": source_file, "chunk_index": i},
-                "embedding": vectors[i]
-            })
-
+        embeddings = get_embeddings()
+        
+        # We can use SupabaseVectorStore.from_documents
+        vector_store = SupabaseVectorStore(
+            client=supabase,
+            embedding=embeddings,
+            table_name="documents",
+            query_name="match_documents",
+        )
+        
+        # Batch insert
         batch_size = 50
-        for idx in range(0, len(records), batch_size):
-            batch = records[idx:idx + batch_size]
-            supabase.table("documents").upsert(batch).execute()
+        import uuid
+        for idx in range(0, len(chunks), batch_size):
+            batch = chunks[idx:idx + batch_size]
+            batch_ids = [str(uuid.uuid4()) for _ in batch]
+            vector_store.add_documents(batch, ids=batch_ids)
+            print(f"  -> Uploaded batch {idx//batch_size + 1}/{(len(chunks)-1)//batch_size + 1}")
+            
         print("🎉 Ingestion into Supabase Vector DB Complete!")
 
 if __name__ == "__main__":

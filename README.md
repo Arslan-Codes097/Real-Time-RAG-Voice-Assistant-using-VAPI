@@ -1,3 +1,12 @@
+---
+title: Vapi RAG Backend
+emoji: 🚀
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
+
 # 🎙️ Real-Time RAG Voice Assistant using VAPI.ai
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)

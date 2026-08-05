@@ -99,27 +99,58 @@ async def vapi_custom_llm_endpoint(request: Request):
 # ---------- Direct REST Chat & Speech APIs & Vapi Tool Endpoints ----------
 
 @app.post("/api/chat")
+@app.post("/api/vapi/tool")
 async def chat_endpoint(request: Request):
-    """Direct RAG query endpoint for text & voice UI and Vapi API Tool calls."""
+    """Direct RAG query endpoint supporting Web UI, Vapi Custom LLM, and Vapi Tool Calls."""
     try:
         body = await request.json()
         
-        # Flexibly extract question from message, query, input, or tool arguments
-        query = body.get("message") or body.get("query") or body.get("input") or ""
-        if isinstance(query, dict):
-            query = query.get("content") or query.get("text") or ""
-            
-        if not str(query).strip() and "message" in body and isinstance(body["message"], str):
-            query = body["message"]
-            
-        if not str(query).strip():
-            query = "What information is in the knowledge base?"
+        tool_call_id = None
+        user_query = ""
+
+        # Check if Vapi sent a Tool Call payload
+        message_obj = body.get("message")
+        if isinstance(message_obj, dict) and message_obj.get("type") == "tool-calls":
+            tool_calls = message_obj.get("toolCalls", [])
+            if tool_calls:
+                tc = tool_calls[0]
+                tool_call_id = tc.get("id")
+                func_args = tc.get("function", {}).get("arguments", {})
+                if isinstance(func_args, dict):
+                    user_query = func_args.get("query") or func_args.get("message") or func_args.get("input") or ""
+                elif isinstance(func_args, str):
+                    user_query = func_args
+
+        # Fallback extraction for direct message, query, or input
+        if not user_query:
+            user_query = body.get("message") or body.get("query") or body.get("input") or ""
+            if isinstance(user_query, dict):
+                user_query = user_query.get("content") or user_query.get("text") or ""
+            elif not str(user_query).strip() and "message" in body and isinstance(body["message"], str):
+                user_query = body["message"]
+
+        if not str(user_query).strip():
+            user_query = "What is in the company policy document?"
 
         model_name = body.get("model", "llama-3.3-70b-versatile")
-        result = query_rag(str(query), model_name=model_name)
+        result = query_rag(str(user_query), model_name=model_name)
+        reply_text = result.get("reply", "No relevant information found in documents.")
+
+        # If Vapi invoked us as a Tool, return Vapi's required tool response format!
+        if tool_call_id:
+            return {
+                "results": [
+                    {
+                        "toolCallId": tool_call_id,
+                        "result": reply_text
+                    }
+                ]
+            }
+
+        # Otherwise return standard JSON response format for web UI
         return result
     except Exception as e:
-        print(f"Chat Endpoint Warning: {e}")
+        print(f"Chat Endpoint Error: {e}")
         return {
             "reply": "I am having trouble accessing documents right now.",
             "sources": [],
