@@ -19,7 +19,7 @@ A state-of-the-art **Real-Time Voice AI Assistant** built with **Vapi.ai** for u
 
 ## 📸 Screenshots
 
-![Main UI Dashboard](docs/assets/main_ui.png)
+![Main UI Dashboard](assets/main_ui.png)
 
 ---
 
