@@ -19,11 +19,7 @@ A state-of-the-art **Real-Time Voice AI Assistant** built with **Vapi.ai** for u
 
 ## 📸 Screenshots
 
-> *Placeholder: Add your UI screenshots to the `docs/assets/` directory.*
-> 
-> | Main Voice Interface | RAG Document Manager |
-> |:---:|:---:|
-> | `[Main UI Screenshot Placeholder]` | `[Doc Manager Screenshot Placeholder]` |
+![Main UI Dashboard](docs/assets/main_ui.png)
 
 ---
 
